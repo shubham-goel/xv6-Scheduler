@@ -89,3 +89,22 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+// Set the scheduling-priority of current process to n
+int
+sys_setprio(void)
+{
+  int n;
+  if(argint(0,&n) < 0)
+    return -1;
+
+  setprio(n);
+  return 0;
+}
+
+// Return the scheduling-priority of current process
+int
+sys_getprio(void)
+{
+  return getprio();
+}

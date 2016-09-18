@@ -87,7 +87,7 @@ userinit(void)
   // the lock isn't needed because no other
   // thread will look at an EMBRYO proc.
   release(&ptable.lock);
-  
+
   initproc = p;
   if((p->pgdir = setupkvm()) == 0)
     panic("userinit: out of memory?");
@@ -490,4 +490,24 @@ procdump(void)
     }
     cprintf("\n");
   }
+}
+
+// Set the scheduling-priority of current process to n
+void
+setprio(int n)
+{
+  acquire(&ptable.lock);
+  proc->prio = n;
+  release(&ptable.lock);
+}
+
+// Return the scheduling-priority of current process
+int
+getprio(void)
+{
+  int n;
+  acquire(&ptable.lock);
+  n=proc->prio;
+  release(&ptable.lock);
+  return n;
 }
