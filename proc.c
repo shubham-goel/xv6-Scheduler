@@ -105,6 +105,9 @@ userinit(void)
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
 
+  // Set priority of init process
+  p->prio = 0;
+
   // this assignment to p->state lets other cores
   // run this process. the acquire forces the above
   // writes to be visible, and the lock is also needed
@@ -176,6 +179,9 @@ fork(void)
   np->cwd = idup(proc->cwd);
 
   safestrcpy(np->name, proc->name, sizeof(proc->name));
+
+  // Set inital priority of new process equal to parent
+  np->prio = proc->prio;
 
   pid = np->pid;
 
@@ -284,10 +290,24 @@ wait(void)
 //  - swtch to start running that process
 //  - eventually that process transfers control
 //      via swtch back to the scheduler.
+int
+maxPrio(void)
+{
+  struct proc *p;
+  int max_prio = -1;
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if(p->state == RUNNABLE && p->prio > max_prio) {
+      max_prio = p->prio;
+    }
+  }
+  return max_prio;
+}
+
 void
 scheduler(void)
 {
   struct proc *p;
+  int max_prio = 0;
 
   for(;;){
     // Enable interrupts on this processor.
@@ -295,9 +315,17 @@ scheduler(void)
 
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
+
+    // Find the maximumum priority amongst RUNNABLE processes
+    max_prio = maxPrio();
+
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE)
+      // Select the next runnable process with highest priority.
+      if(p->state != RUNNABLE || p->prio < max_prio)
         continue;
+
+      cprintf("Chosen on CPU %d: prio:%d pid:%d %s\n",
+        cpu->apicid, p->prio, p->pid, p->name);
 
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
@@ -308,9 +336,15 @@ scheduler(void)
       swtch(&cpu->scheduler, p->context);
       switchkvm();
 
+      cprintf("Done   on CPU %d: prio:%d pid:%d %s\n",
+        cpu->apicid, proc->prio, proc->pid, proc->name);
+
       // Process is done running for now.
       // It should have changed its p->state before coming back.
       proc = 0;
+
+      // Find the maximumpriority amongst all processes.
+      max_prio = maxPrio();
     }
     release(&ptable.lock);
 
@@ -482,7 +516,7 @@ procdump(void)
       state = states[p->state];
     else
       state = "???";
-    cprintf("%d %s %s", p->pid, state, p->name);
+    cprintf("%d %s %d %s", p->pid, state, p->prio, p->name);
     if(p->state == SLEEPING){
       getcallerpcs((uint*)p->context->ebp+2, pc);
       for(i=0; i<10 && pc[i] != 0; i++)
