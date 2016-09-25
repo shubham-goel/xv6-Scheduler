@@ -103,6 +103,10 @@ userinit(void)
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
 
+  // set priority, number of pending slices of init process
+  p->prio = 1;
+  p->pending = 0;
+
   // this assignment to p->state lets other cores
   // run this process. the acquire forces the above
   // writes to be visible, and the lock is also needed
@@ -168,6 +172,11 @@ fork(void)
   np->cwd = idup(proc->cwd);
 
   safestrcpy(np->name, proc->name, sizeof(proc->name));
+
+  // Set inital priority of new process equal to parent
+  // Set inital number of pending slices of new process to 0
+  np->prio = proc->prio;
+  np->pending = 0;
 
   pid = np->pid;
 
@@ -280,14 +289,32 @@ void
 scheduler(void)
 {
   struct proc *p;
+  int incr = 0;
 
   for(;;){
     // Enable interrupts on this processor.
     sti();
-
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
+
+    // Check if there exist any runnable proccess.
+    // If not, store 0 in `incr`
+    incr = 0;
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+      if(p->state == RUNNABLE) {
+        incr = 1;
+        break;
+      }
+    }
+
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+
+      // Increase pending slices of all sleeping, running and runnable processes,
+      // if incr==1. This is to prevent number of pending slices to increase too much.
+      if((p->state == SLEEPING || p->state == RUNNING || p->state == RUNNABLE) && (incr == 1)) {
+        p->pending += p->prio;
+      }
+
       if(p->state != RUNNABLE)
         continue;
 
@@ -299,6 +326,12 @@ scheduler(void)
       p->state = RUNNING;
       swtch(&cpu->scheduler, p->context);
       switchkvm();
+
+      // Update number of pending cycles if the process didn't yield, but slept
+      // We dont care if the process is a zombie
+      if(proc->state == SLEEPING && proc->pending>0) {
+        proc->pending--;
+      }
 
       // Process is done running for now.
       // It should have changed its p->state before coming back.
@@ -339,8 +372,15 @@ void
 yield(void)
 {
   acquire(&ptable.lock);  //DOC: yieldlock
-  proc->state = RUNNABLE;
-  sched();
+
+  // Reduce number of pnding cycles upon yeilding
+  // Yield if pending==0
+  // Also Yield if pending%100 == 0, to prevent a single process from running for too long
+  proc->pending--;
+  if(proc->pending == 0 || proc->pending%100==0) {
+    proc->state = RUNNABLE;
+    sched();
+  }
   release(&ptable.lock);
 }
 
@@ -482,4 +522,24 @@ procdump(void)
     }
     cprintf("\n");
   }
+}
+
+// Set the scheduling-priority of current process to n
+void
+setprio(int n)
+{
+  acquire(&ptable.lock);
+  proc->prio = n;
+  release(&ptable.lock);
+}
+
+// Return the scheduling-priority of current process
+int
+getprio(void)
+{
+  int n;
+  acquire(&ptable.lock);
+  n = proc->prio;
+  release(&ptable.lock);
+  return n;
 }
